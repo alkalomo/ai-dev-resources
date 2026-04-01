@@ -6,7 +6,7 @@ argument-hint: "Optional: PR link, path to specific files/folders, or 'staged' /
 
 # Code Review — Orchestrator
 
-You are the **orchestrator**. You launch sub-agents and present the final review. **Do not read source files, diffs, or review outputs yourself.** All heavy work — including aggregation — is delegated to sub-agents. Your only direct responsibilities are creating the workspace, launching sub-agents in sequence, and displaying the final summary.
+You are the **orchestrator**. You launch sub-agents and present the final review. **Do not read source files, diffs, or review outputs yourself.** All heavy work — including aggregation — is delegated to sub-agents. Your only direct responsibilities are creating the session folder, launching sub-agents in sequence, and displaying the final summary.
 
 ## When to Use
 
@@ -17,85 +17,102 @@ You are the **orchestrator**. You launch sub-agents and present the final review
 
 ## Architecture
 
-Sub-agents communicate through files in a **shared temp folder**, not through the orchestrator's context. Each sub-agent writes its output to a well-known path; the next sub-agent reads from there.
+Each review session gets a **unique session folder** (`.code-review-{SESSION_ID}/`) to avoid collisions when multiple reviews run concurrently. Sub-agents communicate through files in this folder — the orchestrator never reads intermediate files.
+
+The key design principle: **Phase 2 returns structured data to the orchestrator** and writes self-contained per-group briefing files. This means the orchestrator can fire off Phase 3 workers using only the sub-agent's return message — no file reads needed.
 
 ```
 User Input
     │
     ▼
-┌──────────────────────┐
-│  Phase 0: Setup       │  ← Orchestrator: create temp folder
-│  (.code-review/)      │
-└────────┬─────────────┘
+┌───────────────────────────────┐
+│  Phase 0: Setup                │  ← Orchestrator: generate SESSION_ID,
+│  (.code-review-{SESSION_ID}/)  │     create session folder
+└────────┬──────────────────────┘
          │
          ▼
-┌──────────────────────┐
-│  Phase 1: Collect     │  ← Sub-agent: Diff Collector
-│  writes → diff.md     │
-└────────┬─────────────┘
+┌───────────────────────────────┐
+│  Phase 1: Collect              │  ← Sub-agent: Diff Collector
+│  writes → diff.md              │
+└────────┬──────────────────────┘
          │
          ▼
-┌──────────────────────┐
-│  Phase 2: Analyze     │  ← Sub-agent: Change Analyst
-│  reads  ← diff.md     │
-│  writes → analysis.md │
-└────────┬─────────────┘
+┌───────────────────────────────┐
+│  Phase 2: Analyze              │  ← Sub-agent: Change Analyst
+│  reads  ← diff.md + sources   │
+│  writes → group-1.md           │     One self-contained briefing per group
+│           group-2.md           │
+│           group-N.md           │
+│  RETURNS structured group list │  ← Orchestrator uses this to launch Phase 3
+└────────┬──────────────────────┘
          │
          ▼
-┌──────────────────────┐
-│  Phase 3: Review      │  ← Sub-agents: Review Workers (parallel)
-│  reads  ← analysis.md │     One per review group
-│  writes → review-N.md │
-└────────┬─────────────┘
+┌───────────────────────────────┐
+│  Phase 3: Review               │  ← Sub-agents: Review Workers (parallel)
+│  each reads ← group-{id}.md   │     One per review group
+│  each writes → review-{id}.md │
+└────────┬──────────────────────┘
          │
          ▼
-┌──────────────────────┐
-│  Phase 4: Aggregate   │  ← Sub-agent: Aggregator
-│  reads  ← analysis.md │
-│          + review-*.md │
-│  writes → summary.md  │
-└────────┬─────────────┘
+┌───────────────────────────────┐
+│  Phase 4: Aggregate            │  ← Sub-agent: Aggregator
+│  reads  ← review-*.md         │
+│  writes → summary.md          │
+└────────┬──────────────────────┘
          │
          ▼
-┌──────────────────────┐
-│  Phase 5: Present     │  ← Orchestrator: read summary.md
-│  (display to user)    │     and display to user
-└──────────────────────┘
+┌───────────────────────────────┐
+│  Phase 5: Present              │  ← Orchestrator: read summary.md
+│                                │     and display to user
+└───────────────────────────────┘
 ```
 
-### Temp Folder Layout
+### Session Folder Layout
 
 ```
-.code-review/
-├── diff.md          # Phase 1 output — metadata + changed-file list
-├── analysis.md      # Phase 2 output — change summary + review groups
-├── review-1.md      # Phase 3 output — findings for group 1
+.code-review-{SESSION_ID}/
+├── diff.md          # Phase 1 — metadata + changed-file list
+├── group-1.md       # Phase 2 — self-contained briefing for review group 1
+├── group-2.md       #   "
+├── group-N.md       #   "
+├── review-1.md      # Phase 3 — findings for group 1
 ├── review-2.md      #   "
 ├── review-N.md      #   "
-└── summary.md       # Phase 4 output — aggregated final review
+└── summary.md       # Phase 4 — aggregated final review
 ```
 
-All paths below are relative to the workspace root. The orchestrator creates `.code-review/` at the start and each sub-agent writes to its designated file(s).
+All paths below are relative to the workspace root.
 
 ## Procedure
 
 ### Phase 0 — Setup (Orchestrator)
 
-Create the temp folder for this review session:
+1. Generate a short unique session ID (8 hex chars, e.g. from a timestamp or random value).
+2. Create the session folder:
 
-```sh
-mkdir -p .code-review
+```powershell
+# PowerShell (Windows)
+$sessionId = -join ((1..8) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) })
+New-Item -ItemType Directory -Path ".code-review-$sessionId" -Force
 ```
 
-On Windows, use the shell-appropriate equivalent. If `.code-review/` already exists from a previous run, delete its contents first.
+```sh
+# Bash/Zsh (macOS/Linux)
+session_id=$(openssl rand -hex 4)
+mkdir -p ".code-review-${session_id}"
+```
+
+3. Use `.code-review-{SESSION_ID}/` as the session folder for all subsequent phases. Pass this path to every sub-agent.
 
 ### Phase 1 — Diff Collection (Sub-agent)
 
-Launch a sub-agent with the prompt below. Pass along any user-provided context (PR link, file paths, `staged`/`unstaged`).
+Launch a sub-agent with the prompt below. Pass along any user-provided context (PR link, file paths, `staged`/`unstaged`) and the session folder path.
 
 > **Sub-agent prompt — Diff Collector**
 >
 > You are a diff-collection assistant. Your job is to obtain the set of changed files and write a structured summary to disk. Do NOT review the code — only collect.
+>
+> **Session folder:** `{SESSION_FOLDER}`
 >
 > **Determine the source of changes (in priority order):**
 >
@@ -113,7 +130,7 @@ Launch a sub-agent with the prompt below. Pass along any user-provided context (
 >    git diff origin/main...HEAD
 >    ```
 >
-> **Write to `.code-review/diff.md`** with exactly this structure:
+> **Write to `{SESSION_FOLDER}/diff.md`** with exactly this structure:
 > ```
 > METADATA:
 >   source: <"pr" | "local-staged" | "local-unstaged" | "branch-diff">
@@ -133,22 +150,24 @@ Launch a sub-agent with the prompt below. Pass along any user-provided context (
 >   total_deletions: <N>
 > ```
 >
-> Confirm that the file was written successfully. Return only: "Done. Wrote .code-review/diff.md with <N> changed files."
+> Confirm that the file was written successfully. Return only: "Done. Wrote {SESSION_FOLDER}/diff.md with <N> changed files."
 
 **After the sub-agent returns**, do NOT read `diff.md` — the next sub-agent will read it directly.
 
 ### Phase 2 — Change Analysis (Sub-agent)
 
-Launch a sub-agent with the following prompt. Do NOT pass it the diff data — it reads from disk.
+Launch a sub-agent with the following prompt. Do NOT pass it the diff data — it reads from disk. The sub-agent must **return structured group data** in its response so the orchestrator can launch Phase 3 without reading any files.
 
 > **Sub-agent prompt — Change Analyst**
 >
-> You are a change-analysis assistant. Your job is to understand what this change is about and organize files into logical review groups. Do NOT review the code for issues — only analyze and categorize.
+> You are a change-analysis assistant. Your job is to understand what this change is about, organize files into logical review groups, and produce self-contained briefing files for each group. Do NOT review the code for issues — only analyze and categorize.
 >
-> **Input:** Read `.code-review/diff.md` for the changed-file list and metadata.
+> **Session folder:** `{SESSION_FOLDER}`
+>
+> **Input:** Read `{SESSION_FOLDER}/diff.md` for the changed-file list and metadata.
 >
 > **Your tasks:**
-> 1. Read the changed files and enough surrounding code to understand the purpose of each change.
+> 1. Read the changed files listed in `diff.md` **and their full source code** to understand the purpose of each change. Read enough surrounding context (callers, interfaces, related files) to understand how the changed code fits into the larger system.
 > 2. Identify the overall intent: feature, bug fix, refactor, config change, dependency update, etc.
 > 3. Group the changed files into **logical review groups**. Each file must appear in exactly one group. Use your judgment on the right number of groups — this depends entirely on the shape of the change:
 >    - A small, focused change (≤5 files) might warrant a single group.
@@ -157,48 +176,67 @@ Launch a sub-agent with the following prompt. Do NOT pass it the diff data — i
 >    - Do NOT force artificial groupings like "API layer" / "Tests" / "Config" — let the structure of the actual change drive the breakdown.
 > 4. For each group, write a one-sentence summary of what changed in that area.
 >
-> **Write to `.code-review/analysis.md`** with exactly this structure:
+> **Write one briefing file per group** to `{SESSION_FOLDER}/group-{id}.md`. Each briefing must be **self-contained** — a review worker reading only this file should have everything it needs. Use this structure:
 > ```
-> CHANGE SUMMARY:
->   intent: <one-sentence description of what this change accomplishes>
+> GROUP: <group name>
+> GROUP_ID: <id>
+>
+> CHANGE CONTEXT:
+>   intent: <one-sentence description of what the overall change accomplishes>
 >   type: <feature | bugfix | refactor | config | dependency | mixed>
+>   branch: <branch name>
+>   pr_link: <URL or "N/A">
+>   pr_title: <title or "N/A">
 >
-> REVIEW GROUPS:
->   - group: "<group name>"
->     id: 1
->     summary: "<what changed in this area>"
->     files:
->       - <path>
->       - <path>
+> FILES IN THIS GROUP:
+>   - <path> (<added/modified/deleted/renamed>, +<lines> -<lines>)
+>   - <path> ...
 >
->   - group: "<group name>"
->     id: 2
->     summary: "<what changed in this area>"
->     files:
->       - <path>
->       ...
+> GROUP SUMMARY:
+>   <2-3 sentences explaining what changed in these files and why, with enough
+>    context for a reviewer to understand the intent without reading other groups>
+>
+> KEY AREAS TO EXAMINE:
+>   - <specific aspect or concern the reviewer should pay attention to>
+>   - <e.g., "New authorization middleware — verify it covers all routes">
+>   - <e.g., "Database migration adds nullable column — check backfill strategy">
 > ```
 >
-> Confirm that the file was written successfully. Return only: "Done. Wrote .code-review/analysis.md with <N> review groups."
+> **Your return message is critical.** The orchestrator will use it to launch review workers without reading any files. Return your response in **exactly** this format:
+> ```
+> GROUPS:
+>   - id: 1
+>     name: "<group name>"
+>     summary: "<what changed>"
+>     files: ["<path>", "<path>"]
+>   - id: 2
+>     name: "<group name>"
+>     summary: "<what changed>"
+>     files: ["<path>"]
+> TOTAL_GROUPS: <N>
+> CHANGE_INTENT: <one-sentence description>
+> CHANGE_TYPE: <feature | bugfix | refactor | config | dependency | mixed>
+> ```
 
-**After the sub-agent returns**, do NOT read `analysis.md`. Read only the brief confirmation to know how many groups were created — you need this count to launch the correct number of Phase 3 workers.
+**After the sub-agent returns**, parse the group list from its return message. You now have everything needed to launch Phase 3 workers — do NOT read any files.
 
 ### Phase 3 — Review Workers (Sub-agents, parallel)
 
-Launch **one sub-agent per review group**. All workers run in parallel. Each worker reads its assignment from `analysis.md`, reviews its files, and writes findings to `review-{id}.md`.
+Launch **one sub-agent per review group** using the group IDs from the Phase 2 return message. All workers run in parallel. Each worker reads only its own self-contained briefing file.
 
 > **Sub-agent prompt — Review Worker #{GROUP_ID}**
 >
 > You are a senior-engineer code reviewer. Your job is to review one group of files and write your findings to disk.
 >
+> **Session folder:** `{SESSION_FOLDER}`
+>
 > **Setup:**
-> 1. Read `.code-review/analysis.md`.
-> 2. Find the group with `id: {GROUP_ID}`. That is your assignment — note the group name, summary, and file list.
-> 3. Note the overall `CHANGE SUMMARY` (intent and type) for context.
+> 1. Read `{SESSION_FOLDER}/group-{GROUP_ID}.md` for your assignment. This file contains everything you need: the group name, file list, change context, and key areas to examine.
+> 2. Read each file in your group in full, plus enough surrounding code to understand context.
 >
 > **Review instructions:**
-> 1. Read each file in your group in full, plus enough surrounding code to understand context.
-> 2. Evaluate against **all seven review areas** below. Be specific — reference file paths and line numbers.
+> 1. Evaluate against **all seven review areas** below. Be specific — reference file paths and line numbers.
+> 2. Pay special attention to the "KEY AREAS TO EXAMINE" from your briefing.
 > 3. If a review area has no findings for your files, omit it entirely.
 >
 > **Review Checklist:**
@@ -246,7 +284,7 @@ Launch **one sub-agent per review group**. All workers run in parallel. Each wor
 > - Temporary workarounds or test scaffolding
 > - Files that appear unrelated to the change (accidental staging)
 >
-> **Write to `.code-review/review-{GROUP_ID}.md`** with exactly this structure:
+> **Write to `{SESSION_FOLDER}/review-{GROUP_ID}.md`** with exactly this structure:
 > ```
 > GROUP: <group name>
 > FILES REVIEWED: <count>
@@ -269,21 +307,23 @@ Launch **one sub-agent per review group**. All workers run in parallel. Each wor
 > ```
 > Omit any section (CRITICAL, SUGGESTIONS, NITS, POSITIVE) that has no items.
 >
-> Confirm that the file was written successfully. Return only: "Done. Wrote .code-review/review-{GROUP_ID}.md."
+> Confirm that the file was written successfully. Return only: "Done. Wrote {SESSION_FOLDER}/review-{GROUP_ID}.md."
 
 **After all workers return**, do NOT read the review files yourself. Proceed to Phase 4.
 
 ### Phase 4 — Aggregation (Sub-agent)
 
-Launch a sub-agent to read all review outputs and the change analysis, then produce the final consolidated summary.
+Launch a sub-agent to read all review outputs and produce the final consolidated summary.
 
 > **Sub-agent prompt — Aggregator**
 >
-> You are a review-aggregation assistant. Your job is to read the change analysis and all review findings, then produce a single consolidated code review summary.
+> You are a review-aggregation assistant. Your job is to read all review findings and produce a single consolidated code review summary.
+>
+> **Session folder:** `{SESSION_FOLDER}`
 >
 > **Input files:**
-> 1. Read `.code-review/analysis.md` for the change summary, intent, and review group names.
-> 2. Read all `.code-review/review-*.md` files for the findings from each review group.
+> 1. Read `{SESSION_FOLDER}/diff.md` for the branch name, PR link, and file count.
+> 2. Read all `{SESSION_FOLDER}/review-*.md` files for the findings from each review group.
 >
 > **Aggregation rules:**
 > 1. **Determine overall assessment:**
@@ -297,15 +337,13 @@ Launch a sub-agent to read all review outputs and the change analysis, then prod
 > 6. Tag each finding with its source group name for traceability.
 > 7. Omit any section that has no items — do not add filler.
 >
-> Also read `.code-review/diff.md` for the branch name, PR link, and file count.
->
-> **Write to `.code-review/summary.md`** with exactly this structure:
+> **Write to `{SESSION_FOLDER}/summary.md`** with exactly this structure:
 > ```
 > ## Code Review Summary
 >
 > **Branch**: <branch name>
 > **PR**: <link or "local changes">
-> **Change**: <one-sentence intent from analysis.md>
+> **Change**: <one-sentence intent from the review group context>
 > **Files reviewed**: <total count>
 > **Overall assessment**: 🟢 Approve / 🟡 Approve with comments / 🔴 Request changes
 >
@@ -326,8 +364,10 @@ Launch a sub-agent to read all review outputs and the change analysis, then prod
 > ...
 > ```
 >
-> Confirm that the file was written successfully. Return only: "Done. Wrote .code-review/summary.md — assessment: <🟢|🟡|🔴>."
+> Confirm that the file was written successfully. Return only: "Done. Wrote {SESSION_FOLDER}/summary.md — assessment: <🟢|🟡|🔴>."
 
 ### Phase 5 — Present (Orchestrator)
 
-Read `.code-review/summary.md` and display its contents to the user verbatim. This is the only file the orchestrator reads during the entire review.
+Read `{SESSION_FOLDER}/summary.md` and display its contents to the user verbatim. This is the only file the orchestrator reads during the entire review.
+
+The session folder is intentionally kept after the review completes. This allows the user to inspect intermediate artifacts (briefings, individual review files) and re-run or reference past reviews.
