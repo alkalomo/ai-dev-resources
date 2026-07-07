@@ -239,7 +239,7 @@ Launch **one sub-agent per review group** using the group IDs from the Phase 2 r
 > 1. Evaluate against **all seven review areas** below. Be specific — reference file paths and line numbers.
 > 2. Pay special attention to the "KEY AREAS TO EXAMINE" from your briefing.
 > 3. If a review area has no findings for your files, omit it entirely.
-> 4. Before writing output, run a **verification pass** against the actual specified changes under review. Discard or downgrade any finding that does not clearly apply to the PR diff, changed lines, requested scope, or nearby changed-code context.
+> 4. Before writing output, run a **verification pass** against the actual specified changes under review.
 > 5. Then run a **second-pass quality check** on the remaining findings. Discard or downgrade findings that:
 >    - do not apply to the specified changes under review
 >    - are not supported by the changed code or nearby context
