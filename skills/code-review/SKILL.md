@@ -232,12 +232,21 @@ Launch **one sub-agent per review group** using the group IDs from the Phase 2 r
 >
 > **Setup:**
 > 1. Read `{SESSION_FOLDER}/group-{GROUP_ID}.md` for your assignment. This file contains everything you need: the group name, file list, change context, and key areas to examine.
-> 2. Read each file in your group in full, plus enough surrounding code to understand context.
+> 2. Read the actual review scope for this group — the changed files, changed hunks/diff, and any user-requested scope limits.
+> 3. Read each file in your group in full, plus enough surrounding code to understand context.
 >
 > **Review instructions:**
 > 1. Evaluate against **all seven review areas** below. Be specific — reference file paths and line numbers.
 > 2. Pay special attention to the "KEY AREAS TO EXAMINE" from your briefing.
 > 3. If a review area has no findings for your files, omit it entirely.
+> 4. Before writing output, run a **verification pass** against the actual specified changes under review.
+> 5. Then run a **second-pass quality check** on the remaining findings. Discard or downgrade findings that:
+>    - do not apply to the specified changes under review
+>    - are not supported by the changed code or nearby context
+>    - are speculative or based on assumptions not evidenced in the diff
+>    - are duplicates or low-value style/preferences unless they are truly worth surfacing as NITS
+>    - cannot be stated with a clear impact and actionable fix
+> 6. Only include findings that pass both checks.
 >
 > **Review Checklist:**
 >
@@ -330,12 +339,13 @@ Launch a sub-agent to read all review outputs and produce the final consolidated
 >    - Any CRITICAL findings → 🔴 Request changes
 >    - Only SUGGESTIONS or NITS → 🟡 Approve with comments
 >    - No findings (or only POSITIVE) → 🟢 Approve
-> 2. **Deduplicate** findings that appear in multiple groups (keep the most specific one).
-> 3. **Sort** CRITICAL issues first by severity, then by file path.
-> 4. For each finding, preserve the file path and line number from the worker.
-> 5. Briefly explain **why** each issue matters, not just what to change.
-> 6. Tag each finding with its source group name for traceability.
-> 7. Omit any section that has no items — do not add filler.
+> 2. Include only findings that survived the review workers' verification and quality checks — do not add new concerns during aggregation.
+> 3. **Deduplicate** findings that appear in multiple groups (keep the most specific one).
+> 4. **Sort** CRITICAL issues first by severity, then by file path.
+> 5. For each finding, preserve the file path and line number from the worker.
+> 6. Briefly explain **why** each issue matters, not just what to change.
+> 7. Tag each finding with its source group name for traceability.
+> 8. Omit any section that has no items — do not add filler.
 >
 > **Write to `{SESSION_FOLDER}/summary.md`** with exactly this structure:
 > ```
