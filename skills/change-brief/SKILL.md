@@ -1,9 +1,9 @@
 ---
 name: change-brief
-description: |
-  Produce a high-level design brief for a pull request or change set, written so the author can read it unaccompanied. Establishes what the change actually delivers versus what it claims, maps it against the systems it touches, and interrogates the design itself — whether each new durable thing (table, job, endpoint, component, orchestration step) needs to exist, whether an existing mechanism already covers it, whether anything that accumulates has been quantified, and whether a narrow abstraction was introduced where a general one is implied. Ends with an options matrix and the questions that decide between them. Output is a single self-contained markdown artifact with Mermaid diagrams.
-  TRIGGER when: user says "help me understand this PR", "brief me on PR #N", "brief me on this change/branch", "what is this change doing at a high level", "I don't have time to go line by line", "align with the author before reviewing", "does this deviate from our patterns", "what's the blast radius", "should this even be built this way", or asks for an architectural or multi-dimensional read of a change set.
-  SKIP when: the user wants line-level defect hunting, severity-ranked findings, or an approve/request-changes verdict; the change is mechanical (version bump, typo, generated file, straight revert); or the user already knows the design and wants one specific question answered.
+description: |-
+  High-level design brief for a pull request, branch, or commit range, written so the author can read it unaccompanied. Establishes what it delivers versus what it claims, maps it against the systems it touches, and interrogates the design: whether each new durable thing (table, job, endpoint) needs to exist, whether an existing mechanism already covers it, whether what accumulates is quantified, and whether a narrow abstraction was built where a general one is implied. Ends with an options matrix and the questions that decide it.
+  TRIGGER when: user says "brief me on this PR/change", "understand this at a high level", "no time to go line by line", "align with the author before reviewing", "does this deviate from our patterns", or "what's the blast radius".
+  SKIP when: the user wants line-level defect hunting, severity-ranked findings, or an approve/reject verdict; the change is mechanical (version bump, typo, revert); or the design is settled and one specific question is asked.
 argument-hint: "<PR-URL-or-number-or-range> [audience-note] [dimensions-to-emphasize]"
 model: opus
 ---
